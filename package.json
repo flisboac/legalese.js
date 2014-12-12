@@ -1,0 +1,39 @@
+{
+  "name": "legalese",
+  "version": "0.1.0",
+  "description": "Rule-based contract design library and tool for Javascript.",
+  "main": "legalese.js",
+  "scripts": {
+    "test": "grunt test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flisboac/legalese.js"
+  },
+  "keywords": [
+    "design",
+    "validation",
+    "contract",
+    "contracts",
+    "dbc",
+    "design by contract"
+  ],
+  "author": "Flávio Lisbôa",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/flisboac/legalese.js/issues"
+  },
+  "homepage": "https://github.com/flisboac/legalese.js",
+  "devDependencies": {
+    "assert": "^1.1.2",
+    "chai": "^1.10.0",
+    "grunt": "^0.4.5",
+    "grunt-contrib-jshint": "^0.10.0",
+    "grunt-contrib-uglify": "^0.6.0",
+    "grunt-mocha-test": "^0.12.4",
+    "gulp": "^3.8.10",
+    "gulp-mocha": "^2.0.0",
+    "gulp-util": "^3.0.1",
+    "mocha": "^2.0.1"
+  }
+}
