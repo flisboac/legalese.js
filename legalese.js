@@ -13,26 +13,12 @@
 // *TODO: Explanation.*
 // The main entry point of the library's functionalities is the `legal`
 // function.
-export default function legal(contractor, constructor = null, propertyName = null) {
-  var previousContract = contractor[CONTRACT_PROPERTY_NAME];
+export default function legal(contractor = null, propertyName = null) {
+  var previousContract = contractor ? contractor[CONTRACT_PROPERTY_NAME] : null;
   if (previousContract) {
     return previousContract;
   } else {
-    let contract;
-    if (typeof constructor === 'function' && typeof propertyName === 'string') {
-      /* New instance method */
-      constructor.prototype[propertyName] = contractor;
-      contract = new legal.Contract(null, propertyName, constructor);
-      
-    } else if (typeof constructor === 'string') {
-      /* Existing instance method */
-      contract = new legal.Contract(null, propertyName, contractor);
-      
-    } else {
-      /* Constructor, function or object */
-      contract = new legal.Contract(contractor);
-    }
-    return contract;
+    return new Contract(contractor, propertyName)
   }
 }
 
@@ -59,6 +45,11 @@ legal.TESTING = 3;
 legal.DEVELOPMENT = 2;
 legal.DEBUG = 1;
 legal.DEFAULT_BINDING = legal.DEVELOPMENT;
+
+
+// TODO: Documentation.
+legal.CLASS = 'class';
+legal.INSTANCE = 'instance';
 
 
 // Each clause in a contract must be properly classified with a so called type.
@@ -128,14 +119,27 @@ legal.helper = {};
 // string notation.
 // `target` is the object being wrapped. `fullName` is the name of a property
 // that can be prefixed with `get` (the property is only a getter), `set`
-// (the property is only a setter), `
+// (the property is only a setter), `prop` (when property is both a getter
+// and setter) or nothing (when the property is a purely value-based one, with
+// no function-based value interception).
 legal.helper.Property = class Property {
-  constructor(target, fullName) {
+  constructor(target, fullName, targetType = legal.INSTANCE) {
     this.target = target;
     this.fullName = fullName;
+    this.targetType = targetType;
     this.defaults = {
       enumerable: true, configurable: true, writable: this.isValue
     };
+    if (this.isValue) {
+      let desc = this.descriptor;
+      if ('get' in desc && 'set' in descriptor) {
+        this.fullName = 'prop ' + this.fullName;
+      } else if ('get' in desc) {
+        this.fullName = 'get ' + this.fullName;
+      } else if ('set' in desc) {
+        this.fullName = 'set ' + this.fullName;
+      }
+    }
   }
   set getter(fn) {
     var desc = this.defaultDescriptor;
@@ -162,7 +166,7 @@ legal.helper.Property = class Property {
     if (!(this.name in this.target) || Object.hasOwnProperty(this.target, this.name)) {
       return target;
     } else {
-      let site = this.target;
+      let site = this.targetType === legal.INSTANCE ? this.target : this.target.prototype;
       while (site) {
         site = Object.getPrototypeOf(site);
         if (Object.hasOwnProperty(site, this.name)) {
@@ -219,6 +223,145 @@ legal.helper.Property = class Property {
 }
 
 
+legal.helper.Signature = class Signature {
+  constructor(args = null, ret = null, catches = null, help = null) {
+    this.help = help;
+    this.safety = null;
+    this.arguments = null; // null matches anything
+    this.returnType = null; // null matches anything
+    
+    function parse(arg, obj = {}) {
+      switch(true) {
+      case isString(arg):
+        obj.rule = ((a) => (self, obj) => typeof obj === a )(arg);
+        return obj;
+      case isFunction(arg):
+        obj.constructor = arg;
+        switch(arg) {
+        case Array:
+          obj.rule = (self, obj) => isArray(obj);
+          break;
+        case Function:
+          obj.rule = (self, obj) => isFunction(obj);
+          break;
+        case String:
+          obj.rule = (self, obj) => isString(obj);
+          break;
+        case Number:
+          obj.rule = (self, obj) => isNumber(obj);
+          break;
+        case Boolean:
+          obj.rule = (self, obj) => isBoolean(obj);
+          break;
+        default:
+          obj.rule = ((a) => (self, obj) => obj instanceof a )(arg);
+          break;
+        }
+        return obj;
+      case isObject(arg):
+        for (k in arg) {
+          obj[k] = arg[k];
+        }
+        return obj;
+      //case isBoolean(arg):
+        /* Could be "if true, argument must be provided, regardless of type;
+         * if false, argument must not be given." I'll leave it for the
+         * future, IF needed.
+         * obj.rule = ((a) => (self, obj) => a && Boolean(obj) )(arg);
+         */
+      }
+    }
+    
+    if (args) {
+      this.arguments = [];
+      let index = 0;
+      for (arg of args) {
+        let obj = parse(arg);
+        obj.index = index++;
+        this.arguments.push(obj);
+      }
+    }
+    if (ret) {
+      this.returnType = parse(ret);
+    }
+    if (catches) {
+      this.safety = [];
+      let index = 0;
+      for (arg of catches) {
+        let obj = parse(arg);
+        obj.index = index++;
+        this.safety.push(obj);
+      }
+    }
+  }
+  nothrow() {
+    this.safety = [];
+    return this;
+  }
+  throws(...clauses) {
+    this.safety = this.safety || [];
+    clauseItemSplit(clauses, this.safety, function (clause) {
+      clause.type = legal.THROW;
+    });
+    return this;
+  }
+  match(self, ...args) {
+    var flag = true;
+    if (this.arguments.length) {
+      flag = this.arguments.length === args.length;
+      if (flag) {
+        for (let i = 0; flag && i < this.arguments.length; i++) {
+          let rule = this.arguments[i] ? this.arguments[i].rule : null;
+          flag = rule ? rule(self, args[i]) : true;
+        }
+      }
+    }
+    return flag;
+  }
+  returnMatch(self, value) {
+    return this.returnType && this.returnType.rule ? this.returnType.rule(self, value) : true;
+  }
+}
+
+
+// Helper check functions.
+legal.helper.isNullish = function isNullish(obj) {
+  return typeof obj === 'undefined' || (typeof obj === 'object' && !obj);
+}
+legal.helper.isBoolean = function isBoolean(obj) {
+  return typeof obj === 'boolean';
+}
+legal.helper.isNumber = function isNumber(obj) {
+  return typeof obj === 'number' || obj instanceof Number;
+}
+legal.helper.isArray = function isArray(obj) {
+  return 'isArray'in Array ? Array.isArray(obj) : obj instanceof Array;
+}
+legal.helper.isFunction = function isFunction(obj) {
+  return typeof obj === 'function';
+}
+legal.helper.isString = function isString(obj) {
+  return typeof obj === 'string' || obj instanceof String;
+}
+legal.helper.isObject = function isObject(obj) {
+  return typeof obj === 'object' && obj;
+}
+legal.helper.metatypeof = function metatypeof(obj, cmp = null) {
+  var type = typeof obj,
+      metatype;
+  if (type === 'object') {
+    metatype = obj instanceof String ? 'string'
+         : obj instanceof Number ? 'number'
+         : obj instanceof RegExp ? 'regexp'
+         : isArray(obj) ? 'array'
+         : !obj ? 'null'
+         : type
+         ;
+  }
+  return cmp ? ((cmp === type || cmp === metatype) ? metatype : null) : metatype;
+}
+
+
 // `legal.Clause` is a class that holds data to be used by `legal.Court` checks.
 // Only `legal.Clause.rule` required to be assigned a function for a clause to
 // be considered valid. Though, the function signature is dependent exclusively
@@ -244,13 +387,13 @@ function clauseItemSplit(clauses, items, mutator) {
   for (arg of clauses) {
     let clause;
     if (arg) { 
-      if (typeof arg === 'object') {
+      if (isObject('object')) {
         clause = new legal.Clause(arg);
         mutator(clause);
         items.push(clause);
       } else {
         item = item || {};
-        if (typeof arg === 'function') {
+        if (isFunction(arg)) {
           if (item.rule) {
             clause = new legal.Clause(item);
             mutator(clause);
@@ -258,7 +401,7 @@ function clauseItemSplit(clauses, items, mutator) {
             item = {};
           }
           item.rule = arg;
-        } else if (typeof arg === 'string') {
+        } else if (isiron brigade swamp treeString(arg)) {
           item.help = arg;
         } else if (typeof arg === 'number') {
           item.level = arg;
@@ -275,16 +418,34 @@ function clauseItemSplit(clauses, items, mutator) {
 
 
 // `legal.Contract` aggregates clauses and contractor, and provides useful
-// functions to manipulate them.
+// functions to manipulate them. Binding is a term used to describe the act of
+// enforcing the contract upon the contractor and the "goods" (e.g. object
+// instances, resulting values) that it produces. Binding is effectively
+// implemented with interception mechanisms that may involve proxying and
+// wrapping of the goods and contractor when necessary. The resulting wrapped
+// contractor and goods won't necessarily be the same object, but *should* be
+// semantically equal to their originals...
 //
-// `this.contractor` is the object bound by the contract. Similarly,
+// ... And *should* means that, to have exact same content in both bound and
+// original object, Harmony's Proxies should be present and properly
+// implemented.
+//
+// A Contract has three possible use cases:
+// - For a context-less function (function called without a `this` context), e.g.
+//   `new legal.Contract(fn)`
+// - For a class constructor or prototype, e.g.
+//   `new legal.Contract(cls, 'constructor')`
+// - For an instance method, e.g.
+//   `new legal.Contract(cls, 'anyPropertyName')`
+//
+// `this.contractor` is the object actively bound by the contract. Similarly,
 // `this.target` points to the original object *before* binding, so that the
 // original object can be bound again or retrieved if the need arise. If the
 // contract is bound to a "class" constructor, `this.target` is used to
-// instantiate the new object.
+// instantiate the new object *inside* the wrapping function.
 //
-// `this.constructor` points to the function holding the prototype where
-// `this.contractor` is located. `this.propertyName` is the name of the
+// `this.constructor` is a prototype object or a constructor function where
+// `this.target` is located. `this.propertyName` is the name of the
 // contractor in the constructor's prototype. These properties are used to
 // reassign contractors that are "instance method" of some "class". For example,
 // after binding, the assignment
@@ -293,17 +454,43 @@ function clauseItemSplit(clauses, items, mutator) {
 // be considered a "class" if `this.constructor` is null. Also,
 // `this.constructor` is used to obtain the invariants.
 legal.Contract = class Contract {
-  constructor(target = null, propertyName = null, constructor = null) {
-    this.contractor = target;
-    this.constructor = constructor;
+  constructor(target = null, propertyName = null) {
+    this.contractor = null;
+    this.constructor = null;
     this.propertyName = propertyName;
+    this.target = null;
+    this.bindSelector = legal.bound.ge;
+    
     this.invariants = [];
     this.requirements = [];
     this.guarantees = [];
-    this.decorations = [];
-    this.safety = null; // exception safety information
-    this.target = target;
-    this.bindSelector = legal.bound.ge;
+    this.signatures = [
+      new legal.helper.Signature()
+    ];
+    
+    if (!propertyName) {
+      this.target = target;
+    } else {
+      this.constructor = target;
+    }
+  }
+  
+  // TODO documentation.
+  signature(...args) {
+    if (args.length > 0) {
+      let help, inputs, output, catches;
+      for (arg of args) {
+        // TODO Review this logic.
+        if (isString(arg) && (!inputs || output)) help = arg;
+        else if (isArray(arg) && !inputs) inputs = arg;
+        else if (isArray(arg) && inputs) catches = arg;
+        else output = arg;
+      }
+      if (inputs) {
+        this.signatures.push(new legal.helper.Signature(inputs, output, catches, help));
+      }
+    }
+    return this;
   }
   
   // TODO documentation.
@@ -317,7 +504,7 @@ legal.Contract = class Contract {
   // TODO documentation.
   require(...clauses) {
     clauseItemSplit(clauses, this.requirements, function (clause) {
-      clause.type = legal.REQUIREMENT;
+      clause.type = legal.INVARIANT;
     });
     return this;
   }
@@ -325,43 +512,43 @@ legal.Contract = class Contract {
   // TODO documentation.
   guarantee(...clauses) {
     clauseItemSplit(clauses, this.guarantees, function (clause) {
-      clause.type = legal.GUARANTEE;
+      clause.type = legal.INVARIANT;
     });
     return this;
   }
   
   // TODO documentation.
   nothrow() {
-    this.safety = null;
+    this.signatures[0].nothrow();
     return this;
   }
   
   // TODO documentation.
-  throws(...throwables) {
-    this.safety = this.safety || [];
-    clauseItemSplit(clauses, this.safety, function (clause) {
-      clause.type = legal.THROW;
-    });
+  throws(...clauses) {
+    this.signatures[0].throws(...clauses);
     return this;
   }
   
   // TODO documentation.
-  decorate(...functions) {
-    clauseItemSplit(clauses, this.decorations, function (clause) {
-      clause.type = legal.DECORATOR;
-    });
-    return this;
-  }
-  
-  // TODO documentation.
-  body(func) {
-    this.target = func;
+  body(func, writef = null) {
+    if (this.bindType === legal.CLASS) {
+      let prop = new legal.helper.Property(this.constructor, this.propertyName);
+      if (func && writef) {
+        prop.accessor(func, writef);
+      } else if (prop.isGetter) {
+        prop.getter = func;
+      } else if (prop.isSetter) {
+        prop.setter = func;
+      } else {
+        prop.value = func;
+      }
+    }
     return this;
   }
   
   // TODO documentation.
   ammend(otherContract, properties = null) {
-    if (typeof properties === 'string') {
+    if (isString(properties)) {
       properties = [properties];
     }
     
@@ -395,33 +582,47 @@ legal.Contract = class Contract {
         otherContract.requirements.forEach((item) => this.requirements.push(item));
       if (!properties || properties.includes('guarantees'))
         otherContract.guarantees.forEach((item) => this.guarantees.push(item));
-      if (!properties || properties.includes('decorations'))
-        otherContract.decorations.forEach((item) => this.decorations.push(item));
-      if (otherContract.safety && (!properties || properties.includes('safety'))) {
-        this.safety = this.safety || [];
-        otherContract.safety.forEach((item) => this.safety.push(item));
-      }
+      if (!properties || properties.includes('signatures'))
+        otherContract.signatures.forEach((item) => this.requirements.push(item));
     }
+    
     return this;
   }
   
-  // TODO documentation.
+  // Binding only really works for functions and objects (as long as they're not
+  // object versions of primitive types).
   bind(selector = null) {
-    this.bindSelector = selector || this.bindSelector;
-    
+    this.bindSelector = selector || this.bindSelector;    
+    if (!this.bound) { 
+      if (this.bindType === legal.INSTANCE) {
+        // Non-class use case.
+        
+      } else {
+        // Class member use case.
+      }
+    }    
+    return this.contractor;
   }
   
   // TODO documentation.
-  bindClass(selector = null) {}
+  unbind() {
+    if (this.bound) {
+      
+    }
+    return this.target;
+  }
   
   // TODO documentation.
-  unbind() {}
+  trial(goods = null) {
+    // TODO implementation.
+    var court;
+    return court;
+  }
   
   // TODO documentation.
-  trial(goods = null) {}
+  get bound() { return Boolean(this.contractor); }
   
-  // TODO documentation.
-  get bound() { return this.target !== this.contractor; }
+  get bindType() { return this.propertyName ? legal.CLASS : legal.INSTANCE; }
 }
 
 
@@ -466,26 +667,156 @@ legal.selector.ge = function selector_ge(contract, rule) {
   return Number(rule.level) >= legal.DEFAULT_BINDING;
 }
 
+/*
+legal.rule(1, 2).equals().
+legal.rule('equals', obj)
+legal.rule().equals(obj)
+legal.rule.equals(obj)
+
+
+contract()
+  .arg(
+    { name: "xl", type: String })
+   
+  .signature(
+    "Signature description"
+    [ String, String, String, Number ], Array
+    [ Error, AnotherError, YetAnotherError ])
+  
+  .signature(
+    "
+  )
+  .require(
+    "Arg 1 to 3 must be a string",
+    legal.rule(1, 3).metatypeof('string'),
+    legal.DEVELOPMENT,
+    
+    "Arg y must be a number",
+    legal.rule('x').metatypeof('number'),
+    legal.DEVELOPMENT)
+  
+  .ensure(
+    "Result must be an array"
+    legal.rule().
+  )
+
+*/
 
 // TODO documentation.
 legal.rule = function rule(key, ...args) {
-  var data = {},
+  var argIndex = key.indexOf('@'),
+    filter = function(...objs) { return argIndex < 0 ? objs : [objs[argIndex]]; },
     handlers = {
-      constructor: function handler_constructor(self, thrown) {},
-      objtype: function handler_objtype(self, thrown) {},
-      equals: function handler_equals(self, thrown) {},
-      notEquals: function handler_notEquals(self, thrown) {},
-      strictEquals: function handler_strictEquals(self, thrown) {},
-      strictNotEquals: function handler_strictNotEquals(self, thrown) {},
-      match: function handler_match(self, thrown) {},
-      noMatch: function handler_noMatch(self, thrown) {},
-      objectMatch: function handler_objectMatch(self, thrown) {},
-      objectNoMatch: function handler_objectNoMatch(self, thrown) {},
-      any: function handler_any(self, thrown) {},
-      all: function handler_all(self, thrown) {}
+      prototype: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => Object.isPrototypeOf(o, t) )
+        });
+      },
+      'typeof': function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => typeof o === t )
+        });
+      },
+      equals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => o == t )
+        });
+      },
+      notEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => o != t )
+        });
+      },
+      strictEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => o === t )
+        });
+      },
+      strictNotEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => o !== t )
+        });
+      },
+      match: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => {
+            if (isString(t)) {
+              // TODO: Identify when the string comes in a regex format and
+              // apply the transformation accordingly, e.g. `"/pattern/flags"`
+              // becomes `new RegExp(pattern, flags)`.
+              t = new RegExp(t);
+            }
+            return !!o.match(t);
+          })
+        });
+      },
+      noMatch: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => {
+            if (isString(t)) {
+              // TODO: (Same as in the 'match' handler)
+              t = new RegExp(t);
+            }
+            return !(!!o.match(t));
+          })
+        });
+      },
+      objectEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => {
+            for (k in o) {
+              if (o[k] != t[k]) return false;
+            }
+            return true;
+          })
+        });
+      },
+      objNotEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => {
+            for (k in o) {
+              if (o[k] == t[k]) return false;
+            }
+            return true;
+          })
+        });
+      },
+      objStrictEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => {
+            for (k in o) {
+              if (o[k] !== t[k]) return false;
+            }
+            return true;
+          })
+        });
+      },
+      objStrictNotEquals: function (self, ...objs) {
+        return filter(objs).every( (o) => {
+          args.every( (t) => {
+            for (k in o) {
+              if (o[k] === t[k]) return false;
+            }
+            return true;
+          })
+        });
+      },
+      any: function (self, ...objs) {
+        var filteredArgs = filter(objs);
+        return args.every( (t) => t(self, ...filteredArgs) );
+      },
+      all: function (self, ...objs) {
+        var filteredArgs = filter(objs);
+        return args.some( (t) => t(self, ...filteredArgs) );
+      }
     };
+  if (argIndex >= 0) {
+    let idx = Number(key.substring(argIndex + 1));
+    key = key.substring(0, argIndex);
+    argIndex = idx;
+  }
   if (!(key in handlers)) {
-    throw legal.Error("Unknown thrown rule handler '" + key + "'.");
+    throw legal.Error("Unknown rule handler '" + key + "'.");
   }
   return handlers[key];
 }
